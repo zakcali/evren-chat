@@ -1,0 +1,5 @@
+deepseek-v4.1-flash
+gemma-4-31b
+qwen3.8-flash-next
+qwen3-vl-30b
+mimo-v2.6-pro

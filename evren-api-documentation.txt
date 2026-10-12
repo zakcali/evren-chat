@@ -1,0 +1,537 @@
+EVREN LLM API
+Açık ağırlıklı model filosu — OpenAI uyumlu tek uç noktadan, API anahtarınız ve kredi bakiyenizle erişilir. Tamamı yurt içi bare-metal H200 kümesinde çalışır.
+
+14
+
+Model
+
+7
+
+Laboratuvar
+
+1M
+
+Bağlam
+
+3,1T
+
+Parametre
+
+İlk çağrınıza kadar dört adım
+1
+Anahtar oluşturun
+/api-keys sayfasından bir anahtar üretin (evren_llm_... biçiminde).
+
+X-API-Key: evren_llm_...
+
+Her isteğin başlığına ( Headers) bu satırı ekleyin - Postman'de Headers sekmesine Key: X-API-Key, Value: <anahtarınız> girin.
+
+2
+Kullanım şartlarını onaylayın
+GET /v1/terms/status → yanıttaki current_version sayısını not edin
+
+GET /v1/terms/text ile metni okuyun
+
+POST /v1/terms/accept gövdesine az önce not ettiğiniz sayıyı yazın: {"version": <1. adımdaki sayı>}
+
+Hesap başına bir kez gerekir - yeni esaslı sürüm yayınlanmadıkça tekrar istenmez. Bu adımı atlarsanız 403 terms_not_accepted alırsınız. Test Alanı'ndaki anahtar kutusu bu üç adımı tek tıkla yapar.
+
+3
+Model seçin
+Aşağıdaki tablodan modelin kısa kimliğini (örn. glm-5.3) veya tam repo adını (örn. zai/glm-5.3-fp8) seçin ya da geçidin otomatik yönlendirmesi için auto yazın. Her iki format da API tarafından tam olarak desteklenmektedir.
+
+4
+İlk çağrınızı yapın
+POST /v1/chat/completions - OpenAI SDK'sı veya düz curl ile. Aşağıdaki tablodaki ⓘ ikonu hazır kod örnekleri açar.
+
+Göreve Özel Çağrı Örnekleri
+OpenAI & Codex Uyumlu
+Akıl yürütme, araç kullanımı, çok modlu görsel, belge OCR, ses transkripsiyonu ve tipli karar için doğrudan kopyalanabilir hazır yükler.
+
+Akıl Yürütme
+Araç / Tools
+Görsel / Vision
+Belge OCR
+Ses / ASR
+Karar / Laya
+Önemli Kural: DeepSeek ve Qwen akıl yürütme modellerinde düşünme ve nihai yanıt bütçesi ortaktır (max_tokens). Bütçenin düşünme aşamasında tükenmemesi için max_tokens asgari 2048 (önerilen: 4096) girilmelidir. Akışta düşünme token'ları delta.reasoning veya delta.reasoning_content ile iletilir.
+cURL Akış (SSE) İstek Örneği (bash)
+
+curl -N "https://evren-llmapi.ssyz.org.tr/v1/chat/completions" \
+  -H "Authorization: Bearer $EVREN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "deepseek-v4.1-flash",
+    "messages": [{"role": "user", "content": "Algoritmanın karmaşıklığını ve adımlarını açıkla."}],
+    "max_tokens": 4096,
+    "stream": true,
+    "stream_options": {"include_usage": true}
+  }'
+Python OpenAI SDK — Düşünme Ayrıştırma (python)
+
+from openai import OpenAI
+
+client = OpenAI(base_url="https://evren-llmapi.ssyz.org.tr/v1", api_key="evren_llm_...")
+
+stream = client.chat.completions.create(
+    model="deepseek-v4.1-flash",
+    messages=[{"role": "user", "content": "Adımları gerekçelendir."}],
+    max_tokens=4096,
+    stream=True,
+)
+
+for chunk in stream:
+    delta = chunk.choices[0].delta if chunk.choices else None
+    if not delta:
+        continue
+    # Muhakeme aşaması: delta.reasoning veya delta.reasoning_content
+    reasoning = getattr(delta, "reasoning", None) or getattr(delta, "reasoning_content", None)
+    if reasoning:
+        print(f"[Düşünme]: {reasoning}", end="", flush=True)
+    if delta.content:
+        print(delta.content, end="", flush=True)
+Geliştirici Teknik Sözleşmesi ve Kritik İlkeler
+Akıl Yürütme ve Bütçe
+max_tokens ≥ 2048
+Ortak Token Havuzu: DeepSeek ve Qwen gibi akıl yürüten modellerde max_tokens değeri hem düşünme hem de nihai yanıt için ortak kullanılır. Yanıtın yarım kalmaması için bu değeri en az 2048 (önerilen: 4096) olarak belirleyin.
+
+Düşünme Akışı: Modelin iç muhakeme süreci delta.reasoning alanı üzerinden iletilir; resmi OpenAI kütüphaneleri bu alanı otomatik olarak ayrıştırır.
+
+Hız Sınırları ve Kotalar
+15M Günlük · 500k TPM
+15 Milyon Günlük Kota: Hesabınıza günlük 15.000.000 token ücretsiz tanımlanır (1 Kasım tarihine kadar). Bu kota LLM, OCR, embedding, rerank ve Laya dahil tüm modellerin ve tüm API anahtarlarınızın toplamıdır; yeni anahtar oluşturmak kotayı artırmaz. (HTTP 429 hesap kotasını, 503 anlık sunucu doluluğunu belirtir.)
+
+Kalan Kota: Günlük kalan tokenı ve sıfırlanma zamanını aynı API anahtarıyla GET /v1/quota ucundan okuyabilirsiniz. Bu değerler her yanıtta x-evren-daily-remaining-tokens başlığıyla da gelir.
+
+Dakikada 500k Token: Normal hız sınırı 500k TPM'dir. Ancak DeepSeek (1M) gibi modellerde tek seferde gönderilen 500k üzeri devasa analiz istekleri engellenmeden kabul edilir.
+
+Kısa Bekleme: Dakikalık limitiniz dolsa bile sistem hesabınızı kilitlemez; bekleme süresi en fazla 60 saniyedir.
+
+Önbellek İndirimi: Ajan araçlarının (Cline, opencode, Codex) her turda yeniden gönderdiği bağlam sunucu önbelleğinden okunur. Önbellekten gelen girdi token'ları kotaya %3 ağırlıkla yazılır; kullanım sayfasındaki "Önbellekten" ve "Kotaya yansıyan" sütunlarında görebilirsiniz. İsteklerinizin başını (sistem istemi, araç tanımları) sabit tutmak önbellek oranını artırır.
+
+Kesintisiz Akış & Heartbeat
+: keep-alive (10s)
+Bağlantı Koruma: Model uzun süre düşünürken aradaki proxy ve ağ bağlantılarının kopmaması için sunucu her 10 saniyede bir : keep-alive sinyali gönderir.
+
+İstemci Ayarı: Kendi SSE istemcinizi geliştiriyorsanız, iki nokta (:) ile başlayan bu yorum satırlarını JSON ayrıştırmasına sokmadan doğrudan atlayın.
+
+Uçtan uca örnek - anahtar oluşturmadan sohbete kadar
+GET
+/v1/models
+
+Hesabınıza tanımlı modelleri listeleyin
+
+İstek
+
+curl "https://evren-llmapi.ssyz.org.tr/v1/models" \
+  -H "X-API-Key: evren_llm_..."
+Yanıt (200)
+
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "glm-5.3",
+      "object": "model",
+      "created": 1757900000,
+      "owned_by": "evren",
+      "task": "chat",
+      "modalities": ["text"],
+      "pricing": {
+        "prompt_token_price": 0.0,
+        "completion_token_price": 0.0,
+        "currency": "CR",
+        "free_until": "2026-11-01"
+      }
+    },
+    {
+      "id": "deepseek-v4.1-flash",
+      "object": "model",
+      "created": 1757900000,
+      "owned_by": "evren",
+      "task": "chat",
+      "modalities": ["text", "image"],
+      "pricing": {
+        "prompt_token_price": 0.0,
+        "completion_token_price": 0.0,
+        "currency": "CR",
+        "free_until": "2026-11-01"
+      }
+    },
+    {
+      "id": "auto",
+      "object": "model",
+      "created": 1757900000,
+      "owned_by": "evren",
+      "task": "chat",
+      "modalities": ["text"],
+      "pricing": {
+        "prompt_token_price": 0.0,
+        "completion_token_price": 0.0,
+        "currency": "CR",
+        "free_until": "2026-11-01"
+      }
+    }
+  ]
+}
+GET
+/v1/terms/status
+
+Kullanım şartlarını kabul edip etmediğinizi öğrenin
+
+İstek
+
+curl "https://evren-llmapi.ssyz.org.tr/v1/terms/status" \
+  -H "X-API-Key: evren_llm_..."
+Yanıt (200)
+
+{
+  "current_version": 1,
+  "is_material": true,
+  "doc_path": "docs/legal/LLM_TERMS_OF_SERVICE_v1.md",
+  "accepted": false
+}
+GET
+/v1/terms/text
+
+Kabul etmeden önce metnin kendisini okuyun
+
+İstek
+
+curl "https://evren-llmapi.ssyz.org.tr/v1/terms/text" \
+  -H "X-API-Key: evren_llm_..."
+Yanıt (200)
+
+{
+  "version": 1,
+  "doc_path": "docs/legal/LLM_TERMS_OF_SERVICE_v1.md",
+  "content": "# EVREN LLM Gateway — Kullanım Şartları ...\n\n(tam metin)"
+}
+POST
+/v1/terms/accept
+
+current_version'ı olduğu gibi geri gönderip onaylayın
+
+İstek
+
+curl -X POST "https://evren-llmapi.ssyz.org.tr/v1/terms/accept" \
+  -H "X-API-Key: evren_llm_..." \
+  -H "Content-Type: application/json" \
+  -d '{"version": 1}'
+Yanıt (200)
+
+{
+  "accepted_version": 1,
+  "accepted_at": "2026-09-15T16:21:24.012042+00:00"
+}
+POST
+/v1/chat/completions
+
+İlk sohbet çağrınız - şartlar onaylandıktan SONRA çalışır
+
+İstek
+
+curl -X POST "https://evren-llmapi.ssyz.org.tr/v1/chat/completions" \
+  -H "X-API-Key: evren_llm_..." \
+  -H "Content-Type: application/json" \
+  -d '{"model": "auto", "messages": [{"role": "user", "content": "Merhaba"}]}'
+Yanıt (200)
+
+{
+  "id": "chatcmpl-87fa178ae2a2b84a",
+  "object": "chat.completion",
+  "created": 1757900000,
+  "model": "zai/glm-5.3-fp8",
+  "choices": [
+    { "index": 0, "message": { "role": "assistant", "content": "Merhaba! Size nasıl yardımcı olabilirim?" }, "finish_reason": "stop" }
+  ],
+  "usage": { "prompt_tokens": 12, "completion_tokens": 9, "total_tokens": 21 }
+}
+Uç noktalar ve model seçimi
+Tüm istekler https://evren-llmapi.ssyz.org.tr/v1 altına gönderilir. Anahtarınızı /api-keys sayfasından oluşturabilirsiniz.
+
+model alanına aşağıdaki tablodaki api_name değerlerinden birini yazın. Her satırın sağındaki ⓘ ikonu o modele ait kod örneklerini açar.
+
+Model seçmek istemiyorsanız "auto" yazın — gateway isteği aday havuzundaki uygun modele yönlendirir. Bu bir model değil, yönlendirme kipidir; bu yüzden aşağıdaki tabloda listelenmez.
+
+OpenAI API Uyumluluğu
+EVREN LLM API, OpenAI'nin yayınladığı REST sözleşmesini (istek/yanıt şeması, hata gövdesi, akış çerçevesi) uygular. Bu sayede resmi openai SDK'ları (Python, Node.js, Go, Java, .NET) hiçbir kod değişikliği gerektirmeden çalışır - tek yapmanız gereken base_url ve api_key alanlarını kurumunuza tanımlı değerlerle değiştirmektir.
+
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://evren-llmapi.ssyz.org.tr/v1",
+    api_key="evren_llm_...",
+)
+response = client.chat.completions.create(model="auto", messages=[...])
+Desteklenen uçlar
+
+Örnek curl için uç kartına tıklayın
+
+/v1/chat/completions
+Sohbet tamamlama - streaming (SSE) dahil
+
+/v1/responses
+OpenAI'nin yeni Responses API şekli (Codex CLI)
+
+/v1/ocr
+Belge ve taranmış sayfa OCR çıkarımı (dots-ocr, deepseek-ocr-2)
+
+/v1/audio/transcriptions
+Ses → metin (Whisper uyumlu istek şekli)
+
+/v1/embeddings
+Metin gömme vektörü üretimi
+
+/v1/rerank
+Belge yeniden sıralama - OpenAI'de yok, Cohere/Jina sözleşmesiyle uyumlu
+
+/v1/systemone
+Tipli karar (choice / score / noul) - OpenAI'de yok, Jev sözleşmesiyle uyumlu
+
+/v1/models
+Hesaba tanımlı model kataloğu ve fiyatlandırma
+Kimlik doğrulama: hem SDK'ların otomatik gönderdiği Authorization: Bearer <anahtar> başlığı hem de düz X-API-Key başlığı kabul edilir.
+Akış (streaming): stream: true ile standart text/event-stream (SSE) çerçevesi döner - SDK'nın kendi akış iteratörü doğrudan çalışır.
+EVREN'e özgü genişletmeler
+
+Aşağıdakiler OpenAI sözleşmesinin üzerine eklenen, standart SDK davranışını bozmayan ek bilgi alanlarıdır - resmi SDK'lar hangi istisnanın fırlatılacağına sadece HTTP durum koduna bakarak karar verir, bu ek alanları sessizce yok sayar.
+
+error.evren
+Hata gövdesinde ek alt-alan (kalan kota, alternatif model, kabul edilmesi gereken sürüm). Resmi SDK'lar bu alanı YOK SAYAR, akışı bozmaz.
+X-Evren-Credits-*
+Yanıt başlıklarında HOLD/kalan bakiye bilgisi - kredi ekonomisinin şeffaflığı için.
+Kullanım şartları kapısı
+İlk çağrıdan önce tek seferlik onay gerektirir (yukarıdaki adım 2) - OpenAI'nin sözleşmesinde karşılığı yoktur, EVREN'e özgüdür.
+Kullanım Şartları Madde 3: 1 Kasım 2026 tarihine kadar tüm çıkarım modelleri test ve entegrasyon amaçlı tamamen ücretsizdir (0.00 CR).
+
+#	Model	Parametre	Bağlam	Modalite	Görev	
+— Akıl Yürütme · Kod · Ajan
+01	
+deepseek/deepseek-v4-flash
+
+deepseek-v4-flash
+
+DeepSeek
+284
+~13B aktif · MoE
+1M token
+metin
+Kod ve ajan uzmanı
+
+Yarışma seviyesi kod üretimi, 1M bağlam, ayarlanabilir düşünme bütçesi. 1 Kasım 2026'da kaldırılacak — yerine deepseek-v4.1-flash kullanın.
+
+
+02	
+google/gemma-4-31b
+
+gemma-4-31b
+
+Gemma
+31,3
+yoğun (dense) · görsel kodlayıcı dahil
+256K token
+metin
+görsel
+Hızlı sohbet ve belge okuma
+
+Görüntü anlama, nesne tespiti (bbox), ekran/arayüz yorumlama, grafik okuma, el yazısı çözümleme. Düşük gecikmeli günlük iş modeli.
+
+
+03	
+xiaomi/mimo-v2.6-pro
+
+mimo-v2.6-pro
+
+MIT
+1.020
+~42B aktif · MoE
+1M token
+metin
+görsel
+video
+ses
+Uzun soluklu ajan modeli
+
+Filonun en büyük modeli: DeepSWE 71,9, Terminal-Bench 2.1 89,9, OSWorld-Verified 82,0. 1M bağlam, araç çağırma ve düşünme modu; görsel, video ve ses girdisini de anlar (base64 olarak gömülü).
+
+
+04	
+deepseek/deepseek-v4.1-flash
+
+deepseek-v4.1-flash
+
+MIT
+763
+552B omurga + 196B Engram · ~16B aktif
+1M token
+metin
+görsel
+Yeni nesil kod ve ajan modeli
+
+DeepSWE 74,2 ve Terminal-Bench 2.1 90,6 ile ajan görevlerinde en güçlü DeepSeek. 1M bağlam, görsel girdi ve 1-100 arası ayarlanabilir düşünme bütçesi.
+
+
+05	
+qwen/qwen3.8-flash-next
+
+qwen3.8-flash-next
+
+Apache-2.0
+180
+~6B aktif · MoE
+256K token
+metin
+görsel
+Yüksek hacimli sohbet
+
+Vibe coding ve uzun bağlam ajan görevleri. Aktif parametresi düşük olduğu için en yüksek eşzamanlılık; görsel yetenek ikincil.
+
+
+06	
+zai/glm-5.3-fp8
+
+glm-5.3
+
+Z.ai GLM
+753
+~40B aktif · MoE
+512K token
+mimari 1M
+metin
+Amiral model
+
+Derin akıl yürütme, kod üretimi, çok adımlı ajan döngüsü, uzun belge analizi. Filodaki en yetenekli model.
+
+
+— Görsel Anlama
+07	
+qwen/qwen3-vl-30b-a3b
+
+qwen3-vl-30b
+
+Apache-2.0
+31,1
+~3B aktif · MoE
+256K token
+metin
+görsel
+Görsel akıl yürütme
+
+Belge, grafik, ekran görüntüsü ve birden çok görseli birlikte yorumlar. Görseller base64 olarak gömülü gönderilir. Model video da anlayabilir, ancak geçitte video girdisi şu an kapalı.
+
+
+— Arama · Gömme · Güvenlik
+08	
+qwen/qwen3-embedding-8b
+
+qwen3-embedding-8b
+
+Apache-2.0
+7,6
+yoğun (dense)
+40K token
+metin
+Metin gömme (vektörleştirme)
+
+Türkçe gömme ölçütü TR-TEB'de birinci (64,58). Matryoshka ile 32-4096 arası ayarlanabilir vektör boyutu.
+
+
+09	
+qwen/qwen3-vl-reranker-8b
+
+qwen3-reranker-8b
+
+Apache-2.0
+8,8
+yoğun (dense) · Qwen3-VL-Reranker
+4K token
+metin
+Yeniden sıralama (rerank)
+
+Arama sonuçlarını sorguya göre alaka düzeyine dizer (POST /v1/rerank). Model çok modlu bir sıralayıcıdır; geçitteki uç şu an yalnızca metin belge kabul eder.
+
+
+10	
+qwen/qwen3guard-gen-4b
+
+qwen3-guard-4b
+
+Apache-2.0
+4,4
+yoğun (dense)
+32K token
+metin
+İçerik güvenliği
+
+Metinleri güvenli, tartışmalı veya güvensiz olarak sınıflandırır ve tespit edilen risk kategorilerini bildirir.
+
+
+— Karar · Sınıflandırma
+11	
+evren/laya-tr-v5
+
+laya
+
+Apache-2.0
+0,32
+mmBERT-base · EVREN Türkçe ince ayarı
+8K token
+varsayılan 1K · max_len ile 8K
+metin
+Tipli karar motoru
+
+Metin üretmez: bir metin için tanımladığınız choice, score ve noul (evet/hayır) sorularını tek geçişte olasılıklarıyla yanıtlar. Talep yönlendirme, aciliyet, şikâyet ve iptal riski, içerik denetimi. Yalnızca POST /v1/systemone ucundan çağrılır.
+
+
+— Belge ve Ses
+12	
+rednote/dots.mocr
+
+dots-ocr
+
+MIT
+Yalnızca Belge/OCR (POST /v1/ocr) — Sohbet ucunu desteklemez.
+3,0
+yoğun (dense)
+128K token
+metin
+görsel
+İnteraktif belge OCR + SVG
+
+Grafik, tablo, bilimsel şekil ve kimyasal diyagramı doğrudan SVG koduna çevirir. olmOCR ölçütü 83,9.
+
+
+13	
+deepseek/deepseek-ocr-2
+
+deepseek-ocr-2
+
+MIT
+Yalnızca Belge/OCR (POST /v1/ocr) — Sohbet ucunu desteklemez.
+3,4
+yoğun (dense)
+8K token
+metin
+görsel
+Toplu arşiv OCR
+
+Yüksek hacimli belge dijitalleştirme. Toplu iş kuyruğunda çalışır, maliyeti en düşük OCR yolu.
+
+
+14	
+qwen/qwen3-asr-1.7b
+
+qwen3-asr-1.7b
+
+Apache-2.0
+2,3
+dil modeli 1,7B + ses kodlayıcı
+32K token
+ses penceresi ~30 sn
+metin
+Konuşma tanıma (ASR)
+
+Ses kaydını metne çevirir. 30 dil desteği; Türkçe teyitli. Toplantı, çağrı merkezi ve altyazı akışları için.
+
+
