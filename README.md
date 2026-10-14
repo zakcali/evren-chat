@@ -7,7 +7,7 @@ A Gradio chat app for the [EVREN LLM API](https://evren-llmapi.ssyz.org.tr) (Ope
 - **Live model list.** Models and their capabilities (vision, context length, reasoning support) come from EVREN's `/v1/models`. If that call fails, `models.txt` and `models-image.txt` are used instead.
 - **Images and PDFs.** Attach several images and/or PDFs at once. Each PDF page becomes an image, and pages are sent in batches you choose (*Pages per request*).
 - **Streaming answers** with the model's reasoning shown in a separate *Model Thoughts* panel.
-- **Reasoning switch** for each model: off/on, or `low`/`medium`/`xhigh` for qwen3.8 (see [Reasoning controls](#reasoning-controls)).
+- **Reasoning switch** for each model: off/on, `low`/`medium`/`xhigh` for qwen3.8, or `low`/`high`/`max` for glm-5.3 (see [Reasoning controls](#reasoning-controls)). Switching models resets it to that model's default.
 - **Recommended sampling settings from the model card** for qwen3.8, applied automatically. All other models use the defaults.
 - **Download** the last answer as a `.md` file.
 - **Temp-file cleanup.** Everything the app writes is deleted when it stops.
@@ -95,19 +95,21 @@ Page images are sent only with the turn they were attached to. In the conversati
 
 ## Reasoning controls
 
-EVREN's `/v1/models` says several models support reasoning-effort levels. Tested through EVREN (October 2026), only switching thinking **off** made a measurable difference. The levels (`low`/`medium`/`high`/`xhigh`) gave about the same amount of thinking. So the app offers:
+EVREN accepts `reasoning_effort` values `none`, `minimal`, `low`, `medium`, `high`, `xhigh` and `max`, and how it handles them depends on the model. Levels are offered only where the model's own documentation lists them. Results tested through EVREN in October 2026:
 
 | Model | Options | What is sent |
 |---|---|---|
-| deepseek-v4.1-flash, deepseek-v4-flash, glm-5.3, mimo-v2.6-pro | off / on | off → `reasoning_effort="none"`; on → nothing (the model thinks by default) |
+| deepseek-v4.1-flash, deepseek-v4-flash, mimo-v2.6-pro | off / on | off → `reasoning_effort="none"`; on → nothing (the model thinks by default) |
+| glm-5.3 | low / high / max | `reasoning_effort` as documented by Z.ai (default `max`); no off, see below |
 | qwen3.8-flash-next | off / low / medium / xhigh | off → `reasoning_effort="none"`; levels as documented on the [model card](https://huggingface.co/Qwen/Qwen3.8-Flash-Next) (default `xhigh`) |
 | gemma-4-31b | off / on | `chat_template_kwargs.enable_thinking` (gemma rejects `reasoning_effort`) |
 | qwen3-vl-30b, auto | — | no thinking control |
 
 Things to know:
 
-- **Thinking off can lower accuracy.** In testing, qwen3.8 got arithmetic questions wrong with thinking off. Leave it on for anything that needs careful reasoning. Turning it off makes plain transcription faster.
-- **glm-5.3 with thinking off** has no separate reasoning, but it often writes its working into the answer itself.
+- **Use qwen3.8 at `xhigh` (the default).** EVREN passes qwen's levels straight to the model, treating only `high` as `xhigh`; the model rejects `minimal` and `max`. How much qwen thinks at each level varied from task to task, but `xhigh` answered every test question correctly. `low` and thinking off failed often: on "How many days in the week have the letter d in them?" both went 0/3, claiming Tuesday has no "d".
+- **Thinking off can lower accuracy** on any model. Leave it on for anything that needs careful reasoning. Turning it off makes plain transcription faster.
+- **glm-5.3 always thinks.** Z.ai's documentation says its thinking can't be disabled. Through EVREN, "off" makes glm merge its thinking into the answer with no separator, so the app offers only glm's levels. Measured: `low` < `high` < `max`, and `max` is the default. On easy questions `low` and `high` think about the same amount.
 
 ### qwen3.8 sampling
 
@@ -160,4 +162,3 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
-

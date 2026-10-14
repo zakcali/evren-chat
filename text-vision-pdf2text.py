@@ -207,7 +207,8 @@ def uses_template_toggle(model_choice: str) -> bool:
     return any(f in model_choice.lower() for f in TEMPLATE_TOGGLE_FAMILIES)
 
 def has_thinking_toggle(model_choice: str) -> bool:
-    return info_for(model_choice)["reasoning_effort"] or uses_template_toggle(model_choice)
+    return ("levels" in profile_for(model_choice)
+            or info_for(model_choice)["reasoning_effort"] or uses_template_toggle(model_choice))
 
 DEFAULT_TEMPERATURE = 1.0
 DEFAULT_TOP_P       = 1.0
@@ -217,13 +218,23 @@ DEFAULT_TOP_P       = 1.0
 # as substrings of the model id.
 MODEL_PROFILES = {
     # https://huggingface.co/Qwen/Qwen3.8-Flash-Next — xhigh is the default.
-    # Through EVREN (2026-10-09) low/medium/xhigh measured indistinguishable;
-    # kept because the card documents them. "off" sends reasoning_effort="none",
-    # measured identical to the card's enable_thinking=False.
+    # EVREN passes levels through unmapped (except high→xhigh); the model rejects
+    # minimal/max. Measured via EVREN (2026-10-14) the levels don't order
+    # consistently (low thought more than xhigh on math, less on a word puzzle),
+    # but xhigh was always correct while low and off failed often. "off" sends
+    # reasoning_effort="none" (same as the card's enable_thinking=False).
     "qwen3.8": {
         "levels":   ["off", "low", "medium", "xhigh"],
         "sampling": {"on":  {"temperature": 1.0, "top_p": 0.95, "top_k": 20, "presence_penalty": 0.0},
                      "off": {"temperature": 0.7, "top_p": 0.80, "top_k": 20, "presence_penalty": 1.5}},
+    },
+    # Z.ai docs: GLM-5.3 always thinks; reasoning_effort low / high / max
+    # (max is the default). No "off": EVREN's "none" doesn't stop thinking, it
+    # merges the thinking into the answer text with no separator. Measured via
+    # EVREN (2026-10-14): low < high < max (= default); EVREN seems to map
+    # minimal→low, medium→high, xhigh→max.
+    "glm-5.3": {
+        "levels": ["low", "high", "max"],
     },
 }
 
@@ -255,10 +266,13 @@ def build_reasoning_params(model_choice: str, thinking: str) -> dict:
     (glm: low/high shorter than medium); only "none" reliably turns it off. So
     models get off/on unless a MODEL_PROFILES entry lists the model card's levels.
     """
+    if not has_thinking_toggle(model_choice) or thinking not in thinking_levels(model_choice):
+        return {}  # no switch, or a value carried over from another model: server default
+
     if info_for(model_choice)["reasoning_effort"]:
         if thinking == "off":
             return {"reasoning_effort": "none"}
-        if thinking == "on" or thinking not in thinking_levels(model_choice):
+        if thinking == "on":
             return {}  # server default, which thinks
         return {"reasoning_effort": thinking}
 
@@ -292,6 +306,11 @@ def chat(message, history, api_history, model_choice, instructions,
         if not message.strip():
             yield history, api_history, gr.update(), "*No reasoning generated yet...*", initial_dl
             return
+
+    # Clear the textbox right away (message is already captured); PDF
+    # conversion and the first tokens can take a while
+    yield history, api_history, "", "*Waiting for the model...*", initial_dl
+
     images = file_to_images(input_file) if is_vision else []
 
     # ── Build user content ────────────────────────────────────────────────────
@@ -390,7 +409,9 @@ def chat(message, history, api_history, model_choice, instructions,
 
                 if time.time() - last_yield_time >= flush_interval_s:
                     last_yield_time = time.time()
-                    yield history, api_history, gr.update(), reasoning_content, initial_dl
+                    thoughts = reasoning_content or ("*No separate reasoning for this answer.*"
+                                                     if full_content else "*Waiting for the model...*")
+                    yield history, api_history, gr.update(), thoughts, initial_dl
 
         # ── Save last response to temp file ───────────────────────────────────
         with tempfile.NamedTemporaryFile(
@@ -399,7 +420,8 @@ def chat(message, history, api_history, model_choice, instructions,
             tf.write(full_content)
             output_filepath = tf.name
 
-        yield history, api_history, "", reasoning_content, gr.update(visible=True, value=output_filepath)
+        yield (history, api_history, "", reasoning_content or "*No separate reasoning for this answer.*",
+               gr.update(visible=True, value=output_filepath))
 
     except Exception as e:
         error_text = f"❌ An error occurred: {e}"
@@ -493,11 +515,12 @@ with gr.Blocks(title="💬 EVREN Chatbot") as demo:
         return gr.update(value=s["temperature"] if s else DEFAULT_TEMPERATURE,
                          info=sampling_info(model_name, thinking_value))
 
-    def on_model_change(model_name, current_max_tokens, current_thinking):
+    def on_model_change(model_name, current_max_tokens):
         info   = info_for(model_name)
         levels = thinking_levels(model_name)
-        # Keep the user's choice when the new model offers it ("off" always exists)
-        new_thinking = current_thinking if current_thinking in levels else default_thinking(model_name)
+        # Always start from the model's default: a level chosen for another model
+        # (e.g. "off" or "low") can hurt accuracy badly on this one
+        new_thinking = default_thinking(model_name)
         return (
             gr.update(visible=info["vision"]),
             gr.update(visible=info["vision"]),
@@ -509,7 +532,7 @@ with gr.Blocks(title="💬 EVREN Chatbot") as demo:
 
     model_choice.change(
         fn=on_model_change,
-        inputs=[model_choice, max_tokens, thinking],
+        inputs=[model_choice, max_tokens],
         outputs=[input_file, pages_per_request, thinking, max_tokens, temperature],
         queue=False,
     )
